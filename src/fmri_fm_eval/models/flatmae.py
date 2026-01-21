@@ -19,11 +19,12 @@ _resampler = nisc.flat_resampler_fslr64k_224_560()
 class MaskedEncoderWrapper(nn.Module):
     __space__: str = "flat"
 
-    def __init__(self, model: models_mae.MaskedEncoder):
+    def __init__(self, model: models_mae.MaskedEncoder, layer: int | None = None):
         super().__init__()
         T, H, W = model.patchify.img_size
         self.num_frames = T
         self.model = model
+        self.layer = layer
 
     def forward(self, batch: dict[str, Tensor]) -> Embeddings:
         x = batch["bold"]
@@ -50,7 +51,7 @@ class MaskedEncoderWrapper(nn.Module):
             x = rearrange(x, "b c (n f) h w -> (b n) c f h w", n=num_clips)
             mask = rearrange(mask, "b c (n f) h w -> (b n) c f h w", n=num_clips)
 
-        cls_embeds, reg_embeds, patch_embeds = self.model.forward_embedding(x, mask)
+        cls_embeds, reg_embeds, patch_embeds = self.model.forward_embedding(x, mask, layer=self.layer)
 
         # rearrange clips back into single seq of embeddings.
         if num_clips > 1:
@@ -139,23 +140,24 @@ def resample_to_tr(x: Tensor, tr: float, target_tr: float, mode: str = "linear")
 
 
 @register_model
-def flat_mae_base_patch16_16(**kwargs) -> tuple[FlatTransform, MaskedEncoderWrapper]:
+def flat_mae_base_patch16_16(layer: int | None = None, **kwargs) -> tuple[FlatTransform, MaskedEncoderWrapper]:
     transform = FlatTransform()
     model = models_mae.MaskedAutoencoderViT.from_pretrained("medarc/fm_mae_vit_base_patch16-16.hcp")
-    model = MaskedEncoderWrapper(model.encoder)
+    model = MaskedEncoderWrapper(model.encoder, layer=layer)
     return transform, model
 
 
 @register_model
-def flat_mae_base_patch16_2(**kwargs) -> tuple[FlatTransform, MaskedEncoderWrapper]:
+def flat_mae_base_patch16_2(layer: int | None = None, **kwargs) -> tuple[FlatTransform, MaskedEncoderWrapper]:
     transform = FlatTransform()
     model = models_mae.MaskedAutoencoderViT.from_pretrained("medarc/fm_mae_vit_base_patch16-2.hcp")
-    model = MaskedEncoderWrapper(model.encoder)
+    model = MaskedEncoderWrapper(model.encoder, layer=layer)
     return transform, model
 
 
 @register_model
-def flat_mae(*, ckpt_path: str, **kwargs) -> tuple[FlatTransform, MaskedEncoderWrapper]:
+def flat_mae(*, ckpt_path: str, layer: int | None = None, **kwargs) -> tuple[FlatTransform, MaskedEncoderWrapper]:
     transform = FlatTransform()
     model = models_mae.MaskedAutoencoderViT.from_checkpoint(ckpt_path, **kwargs)
+    model = MaskedEncoderWrapper(model.encoder, layer=layer)
     return transform, model

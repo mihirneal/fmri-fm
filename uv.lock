@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'linux'",
@@ -901,7 +901,6 @@ dependencies = [
     { name = "cloudpathlib", extra = ["s3"] },
     { name = "datasets" },
     { name = "einops" },
-    { name = "fmri-fm-eval" },
     { name = "huggingface-hub" },
     { name = "ipython" },
     { name = "jaxtyping" },
@@ -925,12 +924,17 @@ dependencies = [
     { name = "webdataset" },
 ]
 
+[package.optional-dependencies]
+eval = [
+    { name = "fmri-fm-eval" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "cloudpathlib", extras = ["s3"] },
     { name = "datasets" },
     { name = "einops" },
-    { name = "fmri-fm-eval", git = "https://github.com/MedARC-AI/fmri-fm-eval.git" },
+    { name = "fmri-fm-eval", marker = "extra == 'eval'", git = "https://github.com/MedARC-AI/fmri-fm-eval.git" },
     { name = "huggingface-hub" },
     { name = "ipython" },
     { name = "jaxtyping" },
@@ -953,6 +957,7 @@ requires-dist = [
     { name = "wandb" },
     { name = "webdataset" },
 ]
+provides-extras = ["eval"]
 
 [[package]]
 name = "fmri-fm-eval"
@@ -5127,7 +5132,7 @@ wheels = [
 
 [[package]]
 name = "yaspy"
-version = "0.1.dev9+g629df8f"
+version = "0.1.dev9+g629df8fe5"
 source = { git = "https://github.com/childmindresearch/yaspy.git#629df8fe51fc085564b56ef2a2adddec869bfb9a" }
 dependencies = [
     { name = "matplotlib" },

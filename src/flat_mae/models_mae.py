@@ -247,8 +247,62 @@ class MaskedEncoder(nn.Module):
         x: Tensor,
         mask: Tensor | None = None,
         mask_ratio: float | None = None,
+        layer: int | None = None,
     ):
-        cls_embeds, reg_embeds, patch_embeds, *_ = self.forward(x, mask=mask, mask_ratio=mask_ratio)
+        """Extract embeddings from a specific layer.
+
+        Args:
+            layer: Layer index to extract from. None or -1 for last layer.
+                   0 = after first block, 1 = after second block, etc.
+        """
+        if layer is None or layer == -1:
+            cls_embeds, reg_embeds, patch_embeds, *_ = self.forward(x, mask=mask, mask_ratio=mask_ratio)
+            return cls_embeds, reg_embeds, patch_embeds
+
+        # Run forward pass up to specified layer
+        dtype = x.dtype
+
+        if mask is not None:
+            mask = mask.to(dtype).expand_as(x)
+            x = mask * x
+
+        x = self.patchify(x)
+        B, N, P = x.shape
+
+        if mask is not None:
+            mask_patches = self.patchify(mask)
+            patch_num_obs = mask_patches.sum(dim=-1)
+            patch_mask = (patch_num_obs > 0).to(dtype)
+            if self.mask_drop_scale:
+                x = x * (P / patch_num_obs.unsqueeze(-1).clamp(min=1.0))
+        elif mask_ratio is not None:
+            patch_mask = torch.ones((B, N), dtype=dtype, device=x.device)
+            mask_patches = patch_mask.unsqueeze(-1).expand(-1, -1, P)
+        else:
+            patch_mask = mask_patches = None
+
+        x = self.patch_embed(x)
+        x = self.pos_embed(x)
+
+        if mask is not None or mask_ratio is not None:
+            patch_mask, mask_ids = trim_patch_mask(
+                patch_mask, mask_ratio=mask_ratio, shuffle=mask_ratio is not None
+            )
+            mask_patches = mask_patches * patch_mask.unsqueeze(-1)
+            x = x.gather(1, mask_ids.unsqueeze(-1).expand(-1, -1, x.shape[-1]))
+
+        x = self.cat_tokens(x)
+
+        # Run through blocks up to specified layer
+        num_blocks = len(self.blocks)
+        target_layer = layer if layer >= 0 else num_blocks + layer
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            if i == target_layer:
+                break
+
+        x = self.norm(x)
+        cls_embeds, reg_embeds, patch_embeds = self.chunk_tokens(x)
         return cls_embeds, reg_embeds, patch_embeds
 
 
@@ -752,8 +806,9 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         x: Tensor,
         mask: Tensor | None = None,
         mask_ratio: float | None = None,
+        layer: int | None = None,
     ):
-        return self.encoder.forward_embedding(x, mask, mask_ratio)
+        return self.encoder.forward_embedding(x, mask, mask_ratio, layer=layer)
 
     @staticmethod
     def from_checkpoint(ckpt_path: str, **kwargs) -> "MaskedAutoencoderViT":
