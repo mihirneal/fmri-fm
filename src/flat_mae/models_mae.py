@@ -434,7 +434,10 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         pred_edge_pad: int = 0,
         no_decode_pos: bool = False,
         pos_embed: Literal["abs", "sep", "sincos"] = "abs",
-        decoding: Literal["attn", "cross", "crossreg"] = "attn",
+        decoding: Literal["attn", "cross", "crossreg", "ddpm"] = "attn",
+        ddpm_timesteps: int = 1000,
+        ddpm_cross_attn: bool = False,
+        ddpm_pred_scope: Literal["full", "masked"] = "full",
         target_norm: Literal["none", "global", "frame", "patch"] | None = None,
     ):
         super().__init__()
@@ -448,8 +451,10 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         assert not decoding == "crossreg" or reg_tokens > 0, "crossreg decoding requires registers"
         assert pos_embed != "sep" or len(img_size) == 3, "separable pos embed requires 3D inputs"
         assert t_pred_stride == 1 or len(img_size) == 3, "t_pred_stride > 1 requires 3D inputs"
+        assert ddpm_pred_scope in {"full", "masked"}, "ddpm_pred_scope must be 'full' or 'masked'"
 
         self.decoding = decoding
+        self.ddpm_pred_scope = ddpm_pred_scope
         self.t_pred_stride = t_pred_stride  # predict subset of temporal frames
         self.pred_edge_pad = pred_edge_pad  # don't predict edges of visible patches
         self.no_decode_pos = no_decode_pos  # don't pos encode embeddings in decoder
@@ -509,22 +514,39 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         # embedding at some point.
         decoder_head = nn.Linear(decoder_embed_dim, self.pred_patchify.patch_dim)
 
-        cross_decode = decoding in {"cross", "crossreg"}
-        self.decoder = MaskedDecoder(
-            pos_embed=decoder_pos_embed,
-            head=decoder_head,
-            cross_decode=cross_decode,
-            context_dim=embed_dim,
-            depth=decoder_depth,
-            embed_dim=decoder_embed_dim,
-            num_heads=decoder_num_heads,
-            qkv_bias=qkv_bias,
-            proj_bias=proj_bias,
-            mlp_ratio=mlp_ratio,
-            class_token=class_token and not cross_decode,  # cls not active for cross-decode
-            no_embed_class=no_embed_class,
-            no_context_proj=cross_decode,  # don't project embeds for cross-decode
-        )
+        if decoding == "ddpm":
+            from .models_ddpm import NoiseSchedule, DDPMDecoder
+
+            self.noise_schedule = NoiseSchedule(T=ddpm_timesteps)
+            self.decoder = DDPMDecoder(
+                pos_embed=decoder_pos_embed,
+                patch_dim=self.pred_patchify.patch_dim,
+                context_dim=embed_dim,
+                depth=decoder_depth,
+                embed_dim=decoder_embed_dim,
+                num_heads=decoder_num_heads,
+                qkv_bias=qkv_bias,
+                proj_bias=proj_bias,
+                mlp_ratio=mlp_ratio,
+                cross_attn=ddpm_cross_attn,
+            )
+        else:
+            cross_decode = decoding in {"cross", "crossreg"}
+            self.decoder = MaskedDecoder(
+                pos_embed=decoder_pos_embed,
+                head=decoder_head,
+                cross_decode=cross_decode,
+                context_dim=embed_dim,
+                depth=decoder_depth,
+                embed_dim=decoder_embed_dim,
+                num_heads=decoder_num_heads,
+                qkv_bias=qkv_bias,
+                proj_bias=proj_bias,
+                mlp_ratio=mlp_ratio,
+                class_token=class_token and not cross_decode,
+                no_embed_class=no_embed_class,
+                no_context_proj=cross_decode,
+            )
 
         # mae style target normalization
         # dim is relative to an unflattened embedding tensor of shape [B, *grid_size, D]
@@ -542,7 +564,8 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
 
     def extra_repr(self):
         return (
-            f"decoding={self.decoding}, t_pred_stride={self.t_pred_stride}, "
+            f"decoding={self.decoding}, ddpm_pred_scope={self.ddpm_pred_scope}, "
+            f"t_pred_stride={self.t_pred_stride}, "
             f"pred_edge_pad={self.pred_edge_pad}, no_decode_pos={self.no_decode_pos}"
         )
 
@@ -634,13 +657,42 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
 
         return pred_mask_patches, pred_ids
 
+    def prepare_ddpm_pred(
+        self,
+        visible_mask: Tensor,
+        pred_mask: Tensor | None = None,
+        pred_mask_ratio: float | None = None,
+        pred_scope: Literal["full", "masked"] | None = None,
+    ) -> tuple[Float[Tensor, "B N P"], Int[Tensor, "B Q"]]:
+        pred_scope = pred_scope or self.ddpm_pred_scope
+        if pred_scope == "masked":
+            return self.prepare_pred_mask(
+                visible_mask,
+                pred_mask=pred_mask,
+                pred_mask_ratio=pred_mask_ratio,
+            )
+        if pred_scope != "full":
+            raise ValueError(f"Unknown DDPM pred_scope={pred_scope}")
+
+        if pred_mask is None:
+            pred_mask = torch.ones_like(visible_mask)
+
+        pred_mask_patches = self.pred_patchify(pred_mask)
+        B, N, _ = pred_mask_patches.shape
+        pred_ids = torch.arange(N, device=pred_mask_patches.device).unsqueeze(0).expand(B, -1)
+        return pred_mask_patches, pred_ids
+
     def forward_decoder(
         self,
         patch_embeds: Float[Tensor, "B L D"],
         reg_embeds: Float[Tensor, "B R D"] | None,
         visible_ids: Int[Tensor, "B L"],
         pred_ids: Int[Tensor, "B Q"] | None,
+        x_t: Float[Tensor, "B Q P"] | None = None,
+        t: Int[Tensor, "B"] | None = None,
     ) -> Float[Tensor, "B Q P"]:
+        if self.decoding == "ddpm":
+            return self.decoder(x_t, patch_embeds, t, pred_ids, visible_ids)
         if self.decoding == "crossreg":
             assert reg_embeds is not None, "reg_embeds required for crossreg decoding"
             embeds = reg_embeds
@@ -659,17 +711,35 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         targets_patches: Float[Tensor, "B N P"],
         pred_mask_patches: Float[Tensor, "B N P"],
         pred_ids: Int[Tensor, "B Q"],
+        noise: Float[Tensor, "B Q P"] | None = None,
     ) -> Tensor:
-        # select targets corresponding to predictions
         P = self.pred_patchify.patch_dim
-        pred_ids = pred_ids.unsqueeze(-1).expand(-1, -1, P)
-        targets_patches = targets_patches.gather(1, pred_ids)
-        pred_mask_patches = pred_mask_patches.gather(1, pred_ids)
+        pred_ids_exp = pred_ids.unsqueeze(-1).expand(-1, -1, P)
+
+        if self.decoding == "ddpm":
+            # preds = noise_pred, noise = actual epsilon
+            mask = pred_mask_patches.gather(1, pred_ids_exp)
+            loss = (preds - noise) ** 2
+            return (mask * loss).sum() / mask.sum()
+
+        # select targets corresponding to predictions
+        targets_patches = targets_patches.gather(1, pred_ids_exp)
+        pred_mask_patches = pred_mask_patches.gather(1, pred_ids_exp)
 
         # loss over predicted patches
         loss = (preds - targets_patches) ** 2
         loss = (pred_mask_patches * loss).sum() / pred_mask_patches.sum()
         return loss
+
+    def ddpm_predict_x0(
+        self,
+        x_t: Float[Tensor, "B Q P"],
+        noise_pred: Float[Tensor, "B Q P"],
+        t: Int[Tensor, "B"],
+    ) -> Float[Tensor, "B Q P"]:
+        sqrt_acp = self.noise_schedule.sqrt_alphas_cumprod.gather(0, t).view(-1, 1, 1)
+        sqrt_om_acp = self.noise_schedule.sqrt_one_minus_alphas_cumprod.gather(0, t).view(-1, 1, 1)
+        return (x_t - sqrt_om_acp * noise_pred) / sqrt_acp
 
     @torch.no_grad()
     def forward_pred_images(
@@ -714,22 +784,46 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
             images, mask=visible_mask, mask_ratio=mask_ratio
         )
 
-        pred_mask_patches, pred_ids = self.prepare_pred_mask(
-            visible_mask,
-            pred_mask=pred_mask,
-            pred_mask_ratio=pred_mask_ratio,
-        )
+        if self.decoding == "ddpm":
+            pred_mask_patches, pred_ids = self.prepare_ddpm_pred(
+                visible_mask,
+                pred_mask=pred_mask,
+                pred_mask_ratio=pred_mask_ratio,
+            )
+        else:
+            pred_mask_patches, pred_ids = self.prepare_pred_mask(
+                visible_mask,
+                pred_mask=pred_mask,
+                pred_mask_ratio=pred_mask_ratio,
+            )
 
-        preds = self.forward_decoder(patch_embeds, reg_embeds, visible_ids, pred_ids)
-
-        loss = self.forward_loss(preds, targets_patches, pred_mask_patches, pred_ids)
+        pred_values = None
+        if self.decoding == "ddpm":
+            P = self.pred_patchify.patch_dim
+            pred_ids_exp = pred_ids.unsqueeze(-1).expand(-1, -1, P)
+            x0 = targets_patches.gather(1, pred_ids_exp)  # [B, Q, P]
+            B = images.shape[0]
+            t = torch.randint(0, self.noise_schedule.T, (B,), device=images.device)
+            noise = torch.randn_like(x0)
+            x_t = self.noise_schedule.q_sample(x0, t, noise)
+            preds = self.forward_decoder(
+                patch_embeds, reg_embeds, visible_ids, pred_ids, x_t=x_t, t=t
+            )
+            loss = self.forward_loss(
+                preds, targets_patches, pred_mask_patches, pred_ids, noise=noise
+            )
+            pred_values = self.ddpm_predict_x0(x_t, preds, t)
+        else:
+            preds = self.forward_decoder(patch_embeds, reg_embeds, visible_ids, pred_ids)
+            loss = self.forward_loss(preds, targets_patches, pred_mask_patches, pred_ids)
+            pred_values = preds
 
         if not with_state:
             return loss
 
         pred_mask = self.pred_patchify.unpatchify(pred_mask_patches)
         pred_images = self.forward_pred_images(
-            preds, pred_ids, img_mask=img_mask, targets_stats=targets_stats
+            pred_values, pred_ids, img_mask=img_mask, targets_stats=targets_stats
         )
 
         state = {
@@ -746,6 +840,48 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
             "pred_images": pred_images,
         }
         return loss, state
+
+    @torch.no_grad()
+    def generate(
+        self,
+        images: Tensor,
+        mask_ratio: float = 0.9,
+        num_steps: int | None = None,
+        img_mask: Tensor | None = None,
+        pred_scope: Literal["full", "masked"] | None = None,
+    ) -> Tensor:
+        """Run encoder then iteratively denoise masked patches. Returns reconstructed image."""
+        assert self.decoding == "ddpm"
+        T = num_steps or self.noise_schedule.T
+
+        img_mask, visible_mask, _ = self.prepare_masks(
+            img_mask, None, None, images.shape, images.dtype
+        )
+        targets_patches, targets_stats = self.prepare_targets(images, img_mask)
+
+        cls_embeds, reg_embeds, patch_embeds, visible_mask, visible_ids = self.encoder(
+            images, mask=visible_mask, mask_ratio=mask_ratio
+        )
+        _pred_mask_patches, pred_ids = self.prepare_ddpm_pred(
+            visible_mask,
+            pred_mask=img_mask,
+            pred_scope=pred_scope,
+        )
+        B, Q = pred_ids.shape
+        P = self.pred_patchify.patch_dim
+
+        x_t = torch.randn(B, Q, P, device=images.device, dtype=images.dtype)
+
+        for step in reversed(range(T)):
+            t = torch.full((B,), step, device=images.device, dtype=torch.long)
+            noise_pred = self.forward_decoder(
+                patch_embeds, reg_embeds, visible_ids, pred_ids, x_t=x_t, t=t
+            )
+            x_t = self.noise_schedule.p_sample(x_t, t, noise_pred)
+
+        return self.forward_pred_images(
+            x_t, pred_ids, img_mask=img_mask, targets_stats=targets_stats
+        )
 
     def forward_embedding(
         self,
@@ -915,3 +1051,27 @@ def patch_embed_small(**kwargs):
 def patch_embed_base(**kwargs):
     model_args = dict(embed_dim=768, depth=0)
     return _create_vit(**model_args, **kwargs)
+
+
+def diff_mae_vit_small(**kwargs):
+    model_args = dict(embed_dim=384, depth=12, num_heads=6, decoding="ddpm")
+    return _create_mae_vit(**model_args, **kwargs)
+
+
+def diff_mae_vit_base(**kwargs):
+    model_args = dict(embed_dim=768, depth=12, num_heads=12, decoding="ddpm")
+    return _create_mae_vit(**model_args, **kwargs)
+
+
+def diff_mae_vit_small_cross(**kwargs):
+    model_args = dict(
+        embed_dim=384, depth=12, num_heads=6, decoding="ddpm", ddpm_cross_attn=True
+    )
+    return _create_mae_vit(**model_args, **kwargs)
+
+
+def diff_mae_vit_base_cross(**kwargs):
+    model_args = dict(
+        embed_dim=768, depth=12, num_heads=12, decoding="ddpm", ddpm_cross_attn=True
+    )
+    return _create_mae_vit(**model_args, **kwargs)
