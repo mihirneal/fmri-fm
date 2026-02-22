@@ -1,5 +1,6 @@
 # Name of the run. For output directory base name and wandb.
-name: ukbb_pretrain
+name: hcpya_pretrain
+
 # Description of the run. Goes in wandb notes.
 notes: null
 
@@ -55,6 +56,13 @@ model_kwargs:
   #   - ddpm: conditional diffusion decoder predicting noise on patch targets
   decoding: attn
 
+  # DDPM-only settings
+  ddpm_timesteps: 1000
+  ddpm_cross_attn: false
+  #   - full: denoise all patches (flatmap synthesis)
+  #   - masked: denoise only masked patches (MAE-style inpainting)
+  ddpm_pred_scope: full
+
   # position embedding:
   #   - abs: absolute learned position embedding
   #   - sep: separable learned position embedding for time and space from MAE-st
@@ -96,11 +104,12 @@ model_kwargs:
 
 # Datasets
 datasets:
-  ukbb-train:
+  hcp-train:
     type: flat-wds
     # hcp-flat contains 2000 shards, split into 20 batches of unrelated subjects.
     # train on first 18 batches.
-    url: pipe:aws s3 cp s3://ukbb/ukbb-flat/ukbb-flat_{00000..07803}.tar -
+    url: s3://medarc/fmri-fm/datasets/hcp-flat/hcp-flat_{0000..1799}.tar
+    # url: https://huggingface.co/datasets/medarc/hcp-flat-wds/resolve/main/hcp-flat_{0000..1799}.tar
     clipping: random
     clipping_kwargs:
       # sample more clips from each series, to saturate the data loader.
@@ -109,21 +118,12 @@ datasets:
     buffer_size: 1000
     samples_per_epoch: 200000
 
-  ukbb-train-subset:
-    # clips from shards {00000..00099} of ukbb-flat (100 shards)
-    type: flat-wds
-    url: pipe:aws s3 cp s3://ukbb/ukbb-flat/ukbb-flat_{00000..00099}.tar -
-    clipping: sequential
+  # Streaming evaluation datasets from R2
+  hcp-train-subset:
+    # clips from shards {0000..0009} of hcp-flat
+    type: flat-clips
+    root: datasets/flat-clips/hcp-train-clips-16t
     shuffle: false
-    samples_per_epoch: 50000
-
-  ukbb-val:
-    # clips from shards {07804..07903} of ukbb-flat (100 shards)
-    type: flat-wds
-    url: pipe:aws s3 cp s3://ukbb/ukbb-flat/ukbb-flat_{07799..07903}.tar -
-    clipping: sequential
-    shuffle: false
-    samples_per_epoch: 50000
 
   hcp-val:
     # clips from shards {1800..1809} of hcp-flat
@@ -138,10 +138,9 @@ datasets:
     shuffle: false
 
 # which datasets to include
-train_dataset: ukbb-train
+train_dataset: hcp-train
 eval_datasets:
-  - ukbb-train-subset
-  - ukbb-val
+  - hcp-train-subset
   - hcp-val
   - nsd-val
 
