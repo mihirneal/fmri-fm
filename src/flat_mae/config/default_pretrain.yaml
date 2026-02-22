@@ -53,7 +53,15 @@ model_kwargs:
   #   - attn: standard self-attention decoding as in original MAE(-st)
   #   - cross: cross-attention decoding as in CrossMAE
   #   - crossreg: cross-register decoding inspired by MAETok
+  #   - ddpm: conditional diffusion decoder predicting noise on patch targets
   decoding: attn
+
+  # DDPM-only settings
+  ddpm_timesteps: 1000
+  ddpm_cross_attn: false
+  #   - full: denoise all patches (flatmap synthesis)
+  #   - masked: denoise only masked patches (MAE-style inpainting)
+  ddpm_pred_scope: full
 
   # position embedding:
   #   - abs: absolute learned position embedding
