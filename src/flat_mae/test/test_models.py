@@ -161,6 +161,72 @@ def test_mae_vit_decoding(decoding: str):
     assert not torch.isnan(loss)
 
 
+@pytest.mark.parametrize("ddpm_cross_attn", [False, True])
+@pytest.mark.parametrize("ddpm_pred_scope", ["full", "masked"])
+def test_mae_vit_ddpm_decoding(ddpm_cross_attn: bool, ddpm_pred_scope: str):
+    img_size = (32, 64)
+    patch_size = (8, 8)
+    in_chans = 3
+    model = models_mae.MaskedAutoencoderViT(
+        img_size=img_size,
+        patch_size=patch_size,
+        in_chans=in_chans,
+        decoding="ddpm",
+        ddpm_cross_attn=ddpm_cross_attn,
+        ddpm_pred_scope=ddpm_pred_scope,
+        **_CFGS["tiny"],
+    )
+
+    x = torch.randn(2, in_chans, *img_size)
+    loss, state = model.forward(x, mask_ratio=0.75)
+    assert not torch.isnan(loss)
+
+    num_patches = model.pred_patchify.num_patches
+    if ddpm_pred_scope == "full":
+        assert state["pred_ids"].shape[1] == num_patches
+    else:
+        assert state["pred_ids"].shape[1] < num_patches
+    assert state["pred_images"].shape == x.shape
+
+
+@pytest.mark.parametrize("pred_scope", ["full", "masked"])
+def test_mae_vit_ddpm_generate(pred_scope: str):
+    img_size = (32, 64)
+    patch_size = (8, 8)
+    in_chans = 3
+    model = models_mae.MaskedAutoencoderViT(
+        img_size=img_size,
+        patch_size=patch_size,
+        in_chans=in_chans,
+        decoding="ddpm",
+        ddpm_timesteps=8,
+        ddpm_pred_scope=pred_scope,
+        **_CFGS["tiny"],
+    )
+
+    x = torch.randn(2, in_chans, *img_size)
+    y = model.generate(x, mask_ratio=0.75, num_steps=8, pred_scope=pred_scope)
+    assert y.shape == x.shape
+    assert not y.isnan().any()
+
+
+def test_mae_vit_ddpm_x0_reconstruction():
+    model = models_mae.MaskedAutoencoderViT(
+        img_size=(32, 64),
+        patch_size=(8, 8),
+        in_chans=3,
+        decoding="ddpm",
+        **_CFGS["tiny"],
+    )
+
+    x0 = torch.randn(2, 10, model.pred_patchify.patch_dim)
+    t = torch.randint(0, model.noise_schedule.T, (x0.shape[0],))
+    noise = torch.randn_like(x0)
+    x_t = model.noise_schedule.q_sample(x0, t, noise)
+    x0_hat = model.ddpm_predict_x0(x_t, noise, t)
+    assert torch.allclose(x0, x0_hat, atol=1e-5, rtol=1e-5)
+
+
 @pytest.mark.parametrize(
     "with_img_mask,with_visible_mask,with_pred_mask,mask_ratio,pred_mask_ratio",
     [
