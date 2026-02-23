@@ -1,5 +1,5 @@
 # Name of the run. For output directory base name and wandb.
-name: hcpya_pretrain
+name: ddpm_hcpya_pretrain
 
 # Description of the run. Goes in wandb notes.
 notes: null
@@ -113,7 +113,7 @@ datasets:
     type: flat-wds
     # hcp-flat contains 2000 shards, split into 20 batches of unrelated subjects.
     # train on first 18 batches.
-    url: s3://medarc/fmri-fm/datasets/hcp-flat/hcp-flat_{0000..1799}.tar
+    url: pipe:aws s3 cp s3://medarc/fmri-fm/datasets/hcp-flat/hcp-flat_{0000..1799}.tar - 
     # url: https://huggingface.co/datasets/medarc/hcp-flat-wds/resolve/main/hcp-flat_{0000..1799}.tar
     clipping: random
     clipping_kwargs:
@@ -217,6 +217,6 @@ presend_cuda: false
 seed: 7338
 debug: false
 
-wandb: true
+wandb: false
 wandb_entity: null
 wandb_project: fMRI-foundation-model
