@@ -119,10 +119,10 @@ class TimestepEmbedding(nn.Module):
 class AdaLNBlock(nn.Module):
     """Transformer block with Adaptive Layer Normalization (AdaLN-Zero)."""
     
-    def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 4.0):
+    def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 4.0, bias: bool = True):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=False)
-        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.attn = nn.MultiheadAttention(dim, num_heads, bias=bias, batch_first=True)
         
         self.norm2 = nn.LayerNorm(dim, elementwise_affine=False)
         hidden_dim = int(dim * mlp_ratio)
@@ -191,18 +191,27 @@ class DDPMDecoder(nn.Module):
         embed_dim: int = 512,
         num_heads: int = 16,
         mlp_ratio: int | float = 4,
+        qkv_bias: bool = True,
+        proj_bias: bool = True,
+        cross_attn: bool = False,
     ):
         super().__init__()
+        if cross_attn:
+            raise NotImplementedError("cross_attn=True not implemented yet in DDPMDecoder")
         self.patch_proj = nn.Linear(patch_dim, embed_dim)
         self.context_proj = nn.Linear(context_dim, embed_dim)
         self.pos_embed = pos_embed
         self.time_embed = TimestepEmbedding(embed_dim)
+
+        # PyTorch MHA has a single bias flag; combine qkv_bias and proj_bias
+        bias = qkv_bias and proj_bias
 
         self.blocks = nn.ModuleList([
             AdaLNBlock(
                 dim=embed_dim,
                 num_heads=num_heads,
                 mlp_ratio=mlp_ratio,
+                bias=bias,
             )
             for _ in range(depth)
         ])
