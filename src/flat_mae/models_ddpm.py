@@ -7,6 +7,7 @@ DDPM decoder components for diffusion-based masked autoencoder.
 
 NoiseSchedule: cosine beta schedule with forward/reverse diffusion
 TimestepEmbedding: sinusoidal timestep encoding
+AdaLNBlock: Transformer block with Adaptive Layer Normalization
 DDPMDecoder: lightweight transformer decoder conditioned on encoder latents
 """
 
@@ -16,9 +17,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from jaxtyping import Float, Int
-
-from .modules import Block, LayerNorm
-
 
 class NoiseSchedule(nn.Module):
     """Cosine noise schedule (Nichol & Dhariwal 2021)."""
@@ -118,13 +116,70 @@ class TimestepEmbedding(nn.Module):
         return self.mlp(emb)
 
 
+class AdaLNBlock(nn.Module):
+    """Transformer block with Adaptive Layer Normalization (AdaLN-Zero)."""
+    
+    def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 4.0):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim, elementwise_affine=False)
+        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        
+        self.norm2 = nn.LayerNorm(dim, elementwise_affine=False)
+        hidden_dim = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, dim)
+        )
+        
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(dim, 6 * dim, bias=True)
+        )
+        # Zero-initialize the modulation for identity mapping at initialization
+        nn.init.zeros_(self.adaLN_modulation[-1].weight)
+        nn.init.zeros_(self.adaLN_modulation[-1].bias)
+
+    def forward(self, x: Tensor, t_emb: Tensor) -> Tensor:
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(t_emb).chunk(6, dim=1)
+        
+        # Unsqueeze for sequence broadcasting: [B, D] -> [B, 1, D]
+        shift_msa, scale_msa, gate_msa = shift_msa.unsqueeze(1), scale_msa.unsqueeze(1), gate_msa.unsqueeze(1)
+        shift_mlp, scale_mlp, gate_mlp = shift_mlp.unsqueeze(1), scale_mlp.unsqueeze(1), gate_mlp.unsqueeze(1)
+
+        # Attention block
+        attn_input = self.norm1(x) * (1 + scale_msa) + shift_msa
+        attn_out, _ = self.attn(attn_input, attn_input, attn_input, need_weights=False)
+        x = x + gate_msa * attn_out
+
+        # MLP block
+        mlp_input = self.norm2(x) * (1 + scale_mlp) + shift_mlp
+        x = x + gate_mlp * self.mlp(mlp_input)
+        return x
+
+
+class FinalAdaLN(nn.Module):
+    """Final AdaLN layer before the projection head."""
+    def __init__(self, dim: int):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim, elementwise_affine=False)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(dim, 2 * dim, bias=True)
+        )
+        nn.init.zeros_(self.adaLN_modulation[-1].weight)
+        nn.init.zeros_(self.adaLN_modulation[-1].bias)
+        
+    def forward(self, x: Tensor, t_emb: Tensor) -> Tensor:
+        shift, scale = self.adaLN_modulation(t_emb).chunk(2, dim=1)
+        return self.norm(x) * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+
 class DDPMDecoder(nn.Module):
     """
-    Lightweight transformer decoder for DDPM-style denoising.
-
-    Supports two attention modes:
-    - self-attention (cross_attn=False): concatenate encoder context with noisy patches
-    - cross-attention (cross_attn=True): noisy patches attend to encoder context
+    Lightweight transformer decoder for DiffMAE-style denoising.
+    Uses self-attention over combined visible context and noisy patches,
+    conditioned on the diffusion timestep via AdaLN.
     """
 
     def __init__(
@@ -135,36 +190,25 @@ class DDPMDecoder(nn.Module):
         depth: int = 4,
         embed_dim: int = 512,
         num_heads: int = 16,
-        qkv_bias: bool = True,
-        proj_bias: bool = True,
         mlp_ratio: int | float = 4,
-        cross_attn: bool = False,
     ):
         super().__init__()
-        self.cross_attn = cross_attn
-
         self.patch_proj = nn.Linear(patch_dim, embed_dim)
         self.context_proj = nn.Linear(context_dim, embed_dim)
         self.pos_embed = pos_embed
         self.time_embed = TimestepEmbedding(embed_dim)
 
         self.blocks = nn.ModuleList([
-            Block(
+            AdaLNBlock(
                 dim=embed_dim,
                 num_heads=num_heads,
-                qkv_bias=qkv_bias,
-                proj_bias=proj_bias,
                 mlp_ratio=mlp_ratio,
-                context_dim=embed_dim if cross_attn else None,
             )
             for _ in range(depth)
         ])
 
-        self.norm = LayerNorm(embed_dim)
+        self.final_layer = FinalAdaLN(embed_dim)
         self.head = nn.Linear(embed_dim, patch_dim)
-
-    def extra_repr(self):
-        return f"cross_attn={self.cross_attn}"
 
     def forward(
         self,
@@ -174,20 +218,27 @@ class DDPMDecoder(nn.Module):
         pred_ids: Int[Tensor, "B Q"],
         visible_ids: Int[Tensor, "B L"] | None = None,
     ) -> Float[Tensor, "B Q P"]:
+        
+        # 1. Prepare unmasked context (with spatial awareness)
         ctx = self.context_proj(encoder_latents)  # [B, L, embed_dim]
+        if visible_ids is not None:
+            ctx = self.pos_embed(ctx, pos_ids=visible_ids)
+
+        # 2. Prepare noisy patches (with spatial awareness)
         x = self.patch_proj(x_t)  # [B, Q, embed_dim]
-        x = self.pos_embed(x, pos_ids=pred_ids)  # add positional encoding
-        x = x + self.time_embed(t).unsqueeze(1)  # broadcast timestep embedding
+        x = self.pos_embed(x, pos_ids=pred_ids)
 
-        if self.cross_attn:
-            for block in self.blocks:
-                x = block(x, context=ctx)
-        else:
-            L = ctx.shape[1]
-            x = torch.cat([ctx, x], dim=1)  # [B, L+Q, embed_dim]
-            for block in self.blocks:
-                x = block(x)
-            x = x[:, L:]  # slice out Q noisy-patch tokens
+        # 3. Combine sequence
+        L = ctx.shape[1]
+        x = torch.cat([ctx, x], dim=1)  # [B, L+Q, embed_dim]
 
-        x = self.norm(x)
+        # 4. Process through AdaLN blocks
+        t_emb = self.time_embed(t)  # [B, embed_dim]
+        for block in self.blocks:
+            x = block(x, t_emb)
+
+        # 5. Final norm and slice
+        x = self.final_layer(x, t_emb)
+        x = x[:, L:]  # Slice out the Q noisy-patch tokens
+        
         return self.head(x)  # [B, Q, patch_dim]
