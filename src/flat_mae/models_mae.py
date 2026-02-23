@@ -438,6 +438,8 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         ddpm_timesteps: int = 1000,
         ddpm_cross_attn: bool = False,
         ddpm_pred_scope: Literal["full", "masked"] = "full",
+        ddpm_t_sampling: Literal["uniform", "high"] = "uniform",
+        ddpm_t_min_frac: float = 0.5,
         target_norm: Literal["none", "global", "frame", "patch"] | None = None,
     ):
         super().__init__()
@@ -455,6 +457,8 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
 
         self.decoding = decoding
         self.ddpm_pred_scope = ddpm_pred_scope
+        self.ddpm_t_sampling = ddpm_t_sampling
+        self.ddpm_t_min_frac = ddpm_t_min_frac
         self.t_pred_stride = t_pred_stride  # predict subset of temporal frames
         self.pred_edge_pad = pred_edge_pad  # don't predict edges of visible patches
         self.no_decode_pos = no_decode_pos  # don't pos encode embeddings in decoder
@@ -803,7 +807,11 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
             pred_ids_exp = pred_ids.unsqueeze(-1).expand(-1, -1, P)
             x0 = targets_patches.gather(1, pred_ids_exp)  # [B, Q, P]
             B = images.shape[0]
-            t = torch.randint(0, self.noise_schedule.T, (B,), device=images.device)
+            if self.ddpm_t_sampling == "high":
+                t_min = int(self.ddpm_t_min_frac * self.noise_schedule.T)
+                t = torch.randint(t_min, self.noise_schedule.T, (B,), device=images.device)
+            else:
+                t = torch.randint(0, self.noise_schedule.T, (B,), device=images.device)
             noise = torch.randn_like(x0)
             x_t = self.noise_schedule.q_sample(x0, t, noise)
             preds = self.forward_decoder(

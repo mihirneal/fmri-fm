@@ -15,7 +15,7 @@ patch_size: 16
 
 # Temporal config.
 num_frames: 16
-t_patch_size: 4
+t_patch_size: 2
 
 # Mask ratio
 # note that the number of visible patches is computed as
@@ -54,14 +54,19 @@ model_kwargs:
   #   - cross: cross-attention decoding as in CrossMAE
   #   - crossreg: cross-register decoding inspired by MAETok
   #   - ddpm: conditional diffusion decoder predicting noise on patch targets
-  decoding: attn
+  decoding: ddpm
 
   # DDPM-only settings
   ddpm_timesteps: 1000
   ddpm_cross_attn: false
   #   - full: denoise all patches (flatmap synthesis)
   #   - masked: denoise only masked patches (MAE-style inpainting)
-  ddpm_pred_scope: full
+  ddpm_pred_scope: masked
+  # timestep sampling strategy:
+  #   - uniform: sample from full range [0, T)
+  #   - high: sample from high-noise range [t_min_frac * T, T)
+  ddpm_t_sampling: uniform
+  ddpm_t_min_frac: 0.5
 
   # position embedding:
   #   - abs: absolute learned position embedding
