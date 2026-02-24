@@ -856,6 +856,7 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         mask_ratio: float = 0.9,
         num_steps: int | None = None,
         img_mask: Tensor | None = None,
+        visible_mask: Tensor | None = None,
         pred_scope: Literal["full", "masked"] | None = None,
     ) -> Tensor:
         """Run encoder then iteratively denoise masked patches. Returns reconstructed image."""
@@ -863,7 +864,7 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         T = num_steps or self.noise_schedule.T
 
         img_mask, visible_mask, _ = self.prepare_masks(
-            img_mask, None, None, images.shape, images.dtype
+            img_mask, visible_mask, None, images.shape, images.dtype
         )
         targets_patches, targets_stats = self.prepare_targets(images, img_mask)
 
@@ -1072,14 +1073,10 @@ def diff_mae_vit_base(**kwargs):
 
 
 def diff_mae_vit_small_cross(**kwargs):
-    model_args = dict(
-        embed_dim=384, depth=12, num_heads=6, decoding="ddpm", ddpm_cross_attn=True
-    )
+    model_args = dict(embed_dim=384, depth=12, num_heads=6, decoding="ddpm", ddpm_cross_attn=True)
     return _create_mae_vit(**model_args, **kwargs)
 
 
 def diff_mae_vit_base_cross(**kwargs):
-    model_args = dict(
-        embed_dim=768, depth=12, num_heads=12, decoding="ddpm", ddpm_cross_attn=True
-    )
+    model_args = dict(embed_dim=768, depth=12, num_heads=12, decoding="ddpm", ddpm_cross_attn=True)
     return _create_mae_vit(**model_args, **kwargs)

@@ -434,7 +434,7 @@ def evaluate(
     stats = {f"eval/{eval_name}/{k}": meter.global_avg for k, meter in metric_logger.meters.items()}
 
     print(f"Making plots ({eval_name}): example={example_step}")
-    plots = make_plots(args, **example_data)
+    plots = make_plots(args, model, **example_data)
     plots = {f"eval/{eval_name}/{k}": img for k, img in plots.items()}
 
     if log_wandb:
@@ -448,6 +448,7 @@ def evaluate(
 
 def make_plots(
     args: DictConfig,
+    model: nn.Module,
     batch: dict[str, Tensor],
     state: dict[str, Tensor],
 ) -> dict[str, Image.Image]:
@@ -458,10 +459,29 @@ def make_plots(
     if img_mask is not None:
         img_mask = img_mask.expand_as(images)
 
+    pred_images = state["pred_images"]
+
+    # For DDPM: run full reverse diffusion for a meaningful visualization
+    m = model.module if hasattr(model, "module") else model
+    if hasattr(m, "decoding") and m.decoding == "ddpm":
+        device = next(m.parameters()).device
+        gen_images = batch["image"].to(device)
+        gen_img_mask = batch.get("img_mask")
+        if gen_img_mask is not None:
+            gen_img_mask = gen_img_mask.to(device)
+        gen_visible_mask = state["visible_mask"].to(device)
+        pred_images = m.generate(
+            gen_images,
+            mask_ratio=args.mask_ratio,
+            img_mask=gen_img_mask,
+            visible_mask=gen_visible_mask,
+            pred_scope=args.model_kwargs.get("ddpm_pred_scope"),
+        ).cpu()
+
     plots = {}
     mask_pred_fig = vis.plot_mask_pred(
         target=images,
-        pred=state["pred_images"],
+        pred=pred_images,
         visible_mask=state["visible_mask"],
         pred_mask=state["pred_mask"],
         img_mask=img_mask,
