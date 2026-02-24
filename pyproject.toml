@@ -29,6 +29,7 @@ dependencies = [
     "torch==2.8.0",
     "torchvision",
     "tqdm",
+    "pydantic>=2.9",
     "wandb",
     "webdataset",
     "cloudpathlib[s3]",
