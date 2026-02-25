@@ -258,6 +258,7 @@ def create_data_loaders(args: DictConfig):
             sampler=sampler,
             shuffle=shuffle,
             num_workers=args.num_workers,
+            prefetch_factor=args.prefetch_factor,
             pin_memory=True,
             drop_last=True,
         )
