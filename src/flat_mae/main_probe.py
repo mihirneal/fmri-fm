@@ -347,6 +347,7 @@ def create_data_loaders(args: DictConfig):
             sampler=sampler,
             shuffle=shuffle,
             num_workers=args.num_workers,
+            prefetch_factor=args.prefetch_factor,
             collate_fn=masking.mask_collate,  # needed to pad img mask
             pin_memory=True,
             drop_last=True,  # nb, changes the dataset, prob shouldn't do
