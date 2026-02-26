@@ -540,6 +540,30 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
 
         self.init_weights()
 
+    @classmethod
+    def from_checkpoint(cls, ckpt_path: str, **kwargs):
+        """Load a model from a local pretraining checkpoint (.pth file).
+
+        Checkpoint format: {"model": state_dict, "args": OmegaConf_dict, ...}
+        """
+        from omegaconf import OmegaConf
+
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+        args = OmegaConf.create(ckpt["args"])
+
+        model_fn = globals()[args.model]
+        model = model_fn(
+            img_size=args.img_size,
+            in_chans=args.in_chans,
+            patch_size=args.patch_size,
+            num_frames=args.num_frames,
+            t_patch_size=args.t_patch_size,
+            **args.model_kwargs,
+            **kwargs,
+        )
+        model.load_state_dict(ckpt["model"])
+        return model
+
     def extra_repr(self):
         return (
             f"decoding={self.decoding}, t_pred_stride={self.t_pred_stride}, "

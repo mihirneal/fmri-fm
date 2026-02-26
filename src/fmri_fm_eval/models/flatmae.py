@@ -128,3 +128,10 @@ def flat_mae_base_patch16_2(**kwargs) -> tuple[FlatTransform, MaskedEncoderWrapp
     model = models_mae.MaskedAutoencoderViT.from_pretrained("medarc/fm_mae_vit_base_patch16-2.hcp")
     model = MaskedEncoderWrapper(model.encoder)
     return transform, model
+
+@register_model
+def flat_mae(*, ckpt_path: str, **kwargs) -> tuple[FlatTransform, MaskedEncoderWrapper]:
+    transform = FlatTransform()
+    model = models_mae.MaskedAutoencoderViT.from_checkpoint(ckpt_path, **kwargs)
+    model = MaskedEncoderWrapper(model.encoder)
+    return transform, model

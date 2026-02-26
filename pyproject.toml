@@ -41,7 +41,7 @@ version_file = "src/_version.py"
 
 [tool.uv.sources]
 nsdcode = { git = "https://github.com/cvnlab/nsdcode.git", rev = "bfd36a503cc90a3eb3ebfd69b269403f7e186924" }
-fmri-fm-eval = { path = "../fmri-fm-eval", editable = true }
+fmri-fm-eval = { git = "https://github.com/medarc-ai/fmri-fm-eval.git", branch = "main" }
 
 [tool.ruff]
 line-length = 100
