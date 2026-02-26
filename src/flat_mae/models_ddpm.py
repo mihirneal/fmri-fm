@@ -84,6 +84,7 @@ class NoiseSchedule(nn.Module):
 
         # predicted mean
         mean = (x_t - beta / sqrt_one_minus_acp * noise_pred) / alpha.sqrt()
+        mean = mean.clamp(-3, 3)
 
         # add noise for t > 0
         var = self._gather(self.posterior_variance, t)
