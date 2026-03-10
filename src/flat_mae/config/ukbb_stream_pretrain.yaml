@@ -102,7 +102,7 @@ datasets:
     type: flat-wds
     # hcp-flat contains 2000 shards, split into 20 batches of unrelated subjects.
     # train on first 18 batches.
-    url: pipe:aws s3 cp s3://ukbb/ukbb-flat/ukbb-flat_{00000..07803}.tar -
+    url: /teamspace/studios/this_studio/ukbb-flat/ukbb-flat_{00000..07803}.tar
     clipping: random
     clipping_kwargs:
       # sample more clips from each series, to saturate the data loader.

@@ -110,7 +110,7 @@ datasets:
     type: flat-wds
     # hcp-flat contains 2000 shards, split into 20 batches of unrelated subjects.
     # train on first 18 batches.
-    url: pipe:aws s3 cp s3://medarc/fmri-fm/datasets/hcp-flat/hcp-flat_{0000..1799}.tar -
+    url: /teamspace/studios/this_studio/hcp-flat-wds/hcp-flat_{0000..1799}.tar
     # url: https://huggingface.co/datasets/medarc/hcp-flat-wds/resolve/main/hcp-flat_{0000..1799}.tar
     clipping: random
     clipping_kwargs:
