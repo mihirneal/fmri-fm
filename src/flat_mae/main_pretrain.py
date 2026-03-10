@@ -434,9 +434,13 @@ def evaluate(
     print(f"Averaged stats ({eval_name}):", metric_logger)
     stats = {f"eval/{eval_name}/{k}": meter.global_avg for k, meter in metric_logger.meters.items()}
 
-    print(f"Making plots ({eval_name}): example={example_step}")
-    plots = make_plots(args, **example_data)
-    plots = {f"eval/{eval_name}/{k}": img for k, img in plots.items()}
+    plot_period = args.get("plot_period", 1)
+    if plot_period and (epoch + 1) % plot_period == 0:
+        print(f"Making plots ({eval_name}): example={example_step}")
+        plots = make_plots(args, **example_data)
+        plots = {f"eval/{eval_name}/{k}": img for k, img in plots.items()}
+    else:
+        plots = {}
 
     if log_wandb:
         wandb.log(stats, step=1000 * (epoch + 1))

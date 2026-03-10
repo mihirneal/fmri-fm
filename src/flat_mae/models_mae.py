@@ -436,6 +436,7 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         pos_embed: Literal["abs", "sep", "sincos"] = "abs",
         decoding: Literal["attn", "cross", "crossreg"] = "attn",
         target_norm: Literal["none", "global", "frame", "patch"] | None = None,
+        head_init_scale: float | None = None,
     ):
         super().__init__()
         if isinstance(img_size, int):
@@ -538,6 +539,7 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
         else:
             self.target_norm = None
 
+        self.head_init_scale = head_init_scale
         self.init_weights()
 
     def extra_repr(self):
@@ -548,6 +550,8 @@ class MaskedAutoencoderViT(nn.Module, PyTorchModelHubMixin):
 
     def init_weights(self):
         self.apply(_init_weights)
+        if self.head_init_scale is not None:
+            self.decoder.head.weight.data.mul_(self.head_init_scale)
 
     def prepare_masks(
         self,

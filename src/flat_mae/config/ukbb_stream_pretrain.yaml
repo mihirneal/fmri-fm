@@ -41,8 +41,8 @@ pred_mask_ratio: null
 # Constraints for the visible mask:
 #   - null: uniform random masking
 #   - tube: patch tube masking, as in VideoMAE
-# Default is unconstrained uniform masking.
-masking: null
+# Default is tube masking.
+masking: tube
 masking_kwargs: {}
 
 # Model
@@ -76,7 +76,7 @@ model_kwargs:
   # they are already position encoded from the encoder.
   # note this only applies when decoding = attn. for cross and crossreg, the embeddings
   # are never position encoded.
-  no_decode_pos: false
+  no_decode_pos: true
 
   # scale input patches by 1 / observed rate (like dropout)
   mask_drop_scale: false
@@ -89,7 +89,9 @@ model_kwargs:
   class_token: true
   reg_tokens: 0
   # don't add position to cls and reg tokens
-  no_embed_class: false
+  no_embed_class: true
+
+  head_init_scale: 0.0
 
   decoder_depth: 4
   drop_path_rate: 0.0
@@ -139,6 +141,7 @@ datasets:
 
 # which datasets to include
 train_dataset: ukbb-train
+val_dataset: ukbb-val
 eval_datasets:
   - ukbb-train-subset
   - ukbb-val
@@ -205,6 +208,7 @@ start_epoch: 0
 # By default only keep the last checkpoint
 max_checkpoints: 20
 checkpoint_period: 5
+plot_period: 5
 
 device: cuda
 # presend data to cuda asynchronously
