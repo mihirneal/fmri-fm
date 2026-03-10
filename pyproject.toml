@@ -29,6 +29,7 @@ dependencies = [
     "torch==2.8.0",
     "torchvision",
     "tqdm",
+    "pydantic>=2.9",
     "wandb",
     "webdataset",
     "cloudpathlib[s3]",
@@ -45,7 +46,7 @@ eval = [
 version_file = "src/_version.py"
 
 [tool.uv.sources]
-fmri-fm-eval = { path = "../fmri-fm-eval" }
+fmri-fm-eval = { git = "https://github.com/medarc-ai/fmri-fm-eval.git", rev = "b114b89e68c6a046086c91ef191cdceddb5f2a18" }
 nsdcode = { git = "https://github.com/cvnlab/nsdcode.git", rev = "bfd36a503cc90a3eb3ebfd69b269403f7e186924" }
 
 [tool.ruff]
