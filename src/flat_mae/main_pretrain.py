@@ -121,7 +121,7 @@ def main(args: DictConfig):
     epoch_num_batches = len(train_loader)
     steps_per_epoch = epoch_num_batches // args.accum_iter
     total_steps = args.epochs * steps_per_epoch
-    warmup_steps = args.warmup_epochs * steps_per_epoch
+    warmup_steps = int(args.warmup_epochs * steps_per_epoch)
     lr_schedule = ut.WarmupThenCosine(
         base_value=args.lr,
         final_value=args.min_lr,
