@@ -911,6 +911,10 @@ def mae_vit_base(**kwargs):
     model_args = dict(embed_dim=768, depth=12, num_heads=12)
     return _create_mae_vit(**model_args, **kwargs)
 
+def mae_vit_large(**kwargs):
+    model_args = dict(embed_dim=1024, depth=24, num_heads=16)
+    return _create_mae_vit(**model_args, **kwargs)
+
 
 # "patch embed" baseline model, depth 0 ViT (hah)
 def patch_embed_small(**kwargs):
