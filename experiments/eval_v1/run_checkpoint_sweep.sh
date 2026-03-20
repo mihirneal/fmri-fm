@@ -7,14 +7,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-CKPT_DIR="${CKPT_DIR:-checkpoints/ukbb_fulltar_pretrain}"
-OUT_DIR="experiments/eval_v1/output"
-NSD_ROOT="${NSD_ROOT:-/teamspace/studios/this_studio/eval-set}"
-HCPYA_ROOT="${HCPYA_ROOT:-/teamspace/studios/this_studio/eval-set}"
+CKPT_DIR="${CKPT_DIR:-checkpoints/7-8k_ukbb}"
+OUT_DIR="${OUT_DIR:-experiments/eval_v1/output}"
+NSD_ROOT="${NSD_ROOT:-/teamspace/studios/ukbb-pretrain/eval-set}"
+HCPYA_ROOT="${HCPYA_ROOT:-/teamspace/studios/ukbb-pretrain/eval-set}"
+AABC_ROOT="${AABC_ROOT:-/teamspace/studios/this_studio/fmri-fm-eval/datasets/AABC/data/processed}"
 DEVICE="${DEVICE:-cuda:3}"
-WANDB="${WANDB:-false}"
+WANDB="${WANDB:-true}"
+# DATASET="${DATASET:-hcpya_task21}"   # nsd_cococlip or hcpya_task21
 DATASET="${DATASET:-nsd_cococlip}"   # nsd_cococlip or hcpya_task21
-SWEEP_NAME="${SWEEP_NAME:-ukbb_fulltar_pretrain/${DATASET}}"
+SWEEP_NAME="${SWEEP_NAME:-7-8k_ukbb/${DATASET}}"
 CLASSIFIER="${CLASSIFIER:-attn}"    # linear or attn
 
 # ── Discover checkpoints (sorted numerically) ──────────────────────────
@@ -37,11 +39,16 @@ for CKPT_PATH in "${CKPTS[@]}"; do
     EPOCH_TAG="${CKPT_NAME#checkpoint-}"              # e.g. 00010 or last
     RUN_NAME="${SWEEP_NAME}/${EPOCH_TAG}"
 
+    # if [[ -f "${OUT_DIR}/${RUN_NAME}/eval_log.json" ]]; then
+    #     echo "  Skipping ${EPOCH_TAG} (already done)"
+    #     continue
+    # fi
+
     echo "══════════════════════════════════════════════════════════════"
     echo "  ${DATASET} | ${CKPT_NAME}  →  ${RUN_NAME}"
     echo "══════════════════════════════════════════════════════════════"
 
-    NSD_ROOT="${NSD_ROOT}" HCPYA_ROOT="${HCPYA_ROOT}" \
+    NSD_ROOT="${NSD_ROOT}" HCPYA_ROOT="${HCPYA_ROOT}" AABC_ROOT="${AABC_ROOT}" \
     uv run python -m fmri_fm_eval.main_probe \
         flat_mae \
         patch \
@@ -53,14 +60,15 @@ for CKPT_PATH in "${CKPTS[@]}"; do
         wandb=${WANDB} \
         debug=false \
         device=${DEVICE} \
-        epochs=4 \
-        steps_per_epoch=500 \
-        warmup_epochs=2 \
-        batch_size=128 \
+        epochs=10 \
+        steps_per_epoch=200 \
+        warmup_epochs=4 \
+        batch_size=64 \
+        accum_iter=2 \
         base_lr=0.001 \
         weight_decay=0.05 \
         lr_scale_grid=[0.03,0.1,0.3,1.0,3.0,10.0,30.0] \
-        wd_scale_grid=[0.03,0.1,0.3,1.0,3.0,10.0,30.0] \
+        wd_scale_grid=[1.0] \
         num_workers=16 \
         prefetch_factor=8 \
         output_root=${OUT_DIR}
