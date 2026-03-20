@@ -7,16 +7,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-CKPT_DIR="${CKPT_DIR:-checkpoints/7-8k_ukbb}"
+CKPT_DIR="${CKPT_DIR:-checkpoints/ukbb_baseline}"
 OUT_DIR="${OUT_DIR:-experiments/eval_v1/output}"
 NSD_ROOT="${NSD_ROOT:-/teamspace/studios/ukbb-pretrain/eval-set}"
 HCPYA_ROOT="${HCPYA_ROOT:-/teamspace/studios/ukbb-pretrain/eval-set}"
 AABC_ROOT="${AABC_ROOT:-/teamspace/studios/this_studio/fmri-fm-eval/datasets/AABC/data/processed}"
-DEVICE="${DEVICE:-cuda:3}"
-WANDB="${WANDB:-true}"
-# DATASET="${DATASET:-hcpya_task21}"   # nsd_cococlip or hcpya_task21
-DATASET="${DATASET:-nsd_cococlip}"   # nsd_cococlip or hcpya_task21
-SWEEP_NAME="${SWEEP_NAME:-7-8k_ukbb/${DATASET}}"
+DEVICE="${DEVICE:-cuda:7}"
+WANDB="${WANDB:-false}"
+DATASET="${DATASET:-hcpya_task21}"   # nsd_cococlip or hcpya_task21
+# DATASET="${DATASET:-nsd_cococlip}"   # nsd_cococlip or hcpya_task21
+SWEEP_NAME="${SWEEP_NAME:-ukbb_baseline/${DATASET}}"
 CLASSIFIER="${CLASSIFIER:-attn}"    # linear or attn
 
 # ── Discover checkpoints (sorted numerically) ──────────────────────────
@@ -65,9 +65,10 @@ for CKPT_PATH in "${CKPTS[@]}"; do
         warmup_epochs=4 \
         batch_size=64 \
         accum_iter=2 \
-        base_lr=0.001 \
+        lr=0.001 \
         weight_decay=0.05 \
-        lr_scale_grid=[0.03,0.1,0.3,1.0,3.0,10.0,30.0] \
+        cv_metric=acc \
+        "lr_scale_grid=[0.02,0.023,0.028,0.033,0.038,0.045,0.053,0.062,0.074,0.087,0.1,0.12,0.14,0.17,0.2,0.23,0.27,0.32,0.38,0.44,0.52,0.61,0.72,0.85,1.0,1.2,1.4,1.6,1.9,2.3,2.7,3.1,3.7,4.3,5.1,6.0,7.1,8.3,9.8,12.0,14.0,16.0,19.0,22.0,26.0,31.0,36.0,43.0,50.0]" \
         wd_scale_grid=[1.0] \
         num_workers=16 \
         prefetch_factor=8 \
