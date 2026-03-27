@@ -121,7 +121,7 @@ def main(args: DictConfig):
     epoch_num_batches = len(train_loader)
     steps_per_epoch = epoch_num_batches // args.accum_iter
     total_steps = args.epochs * steps_per_epoch
-    warmup_steps = args.warmup_epochs * steps_per_epoch
+    warmup_steps = int(args.warmup_epochs * steps_per_epoch)
     lr_schedule = ut.WarmupThenCosine(
         base_value=args.lr,
         final_value=args.min_lr,
@@ -159,17 +159,19 @@ def main(args: DictConfig):
 
         eval_stats = {}
         eval_plots = {}
-        for name, loader in eval_loaders.items():
-            stats, plots = evaluate(
-                args,
-                model,
-                loader,
-                epoch,
-                device,
-                eval_name=name,
-            )
-            eval_stats.update(stats)
-            eval_plots.update(plots)
+        if is_master or not args.distributed:
+            eval_model = model_without_ddp if args.distributed else model
+            for name, loader in eval_loaders.items():
+                stats, plots = evaluate(
+                    args,
+                    eval_model,
+                    loader,
+                    epoch,
+                    device,
+                    eval_name=name,
+                )
+                eval_stats.update(stats)
+                eval_plots.update(plots)
 
         merged_stats = {"epoch": epoch, **train_stats, **eval_stats}
         if is_master:
@@ -181,6 +183,11 @@ def main(args: DictConfig):
                 img.save(output_dir / f"{plot_name}__{epoch:05d}.png")
 
         ut.save_model(args, epoch, model_without_ddp, optimizer, loss_scaler)
+
+        # sync all ranks before next epoch so non-master ranks wait for
+        # master to finish eval + save before entering training
+        if args.distributed:
+            torch.distributed.barrier()
 
     if args.distributed:
         torch.distributed.destroy_process_group()
@@ -211,7 +218,11 @@ def create_data_loaders(args: DictConfig):
     collate_fn = partial(masking.mask_collate, mask_fn=mask_fn)
 
     data_loaders = {}
-    dataset_names = [args.train_dataset] + args.eval_datasets
+    # eval runs on master only, so non-master ranks skip eval dataset creation
+    if ut.is_main_process() or not args.get("distributed", False):
+        dataset_names = [args.train_dataset] + args.eval_datasets
+    else:
+        dataset_names = [args.train_dataset]
 
     for dataset_name in dataset_names:
         dataset_config = args.datasets[dataset_name].copy()
@@ -242,7 +253,7 @@ def create_data_loaders(args: DictConfig):
             shuffle = False
         elif dataset_type == "flat-clips":
             dataset = flat_data.FlatClipsDataset(dataset_config.root, transform=transform)
-            if args.distributed:
+            if args.distributed and dataset_name == args.train_dataset:
                 sampler = DistributedSampler(dataset, shuffle=dataset_config.shuffle)
             else:
                 sampler = None
@@ -260,11 +271,14 @@ def create_data_loaders(args: DictConfig):
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
-            persistent_workers=True
         )
 
-        # setting the epoch length is needed for infinite wds loaders
-        num_batches = samples_per_epoch // (ut.get_world_size() * args.batch_size)
+        # setting the epoch length is needed for infinite wds loaders.
+        # eval loaders are only created on master, so world_size division
+        # only applies to the train loader.
+        is_train = dataset_name == args.train_dataset
+        divisor = ut.get_world_size() * args.batch_size if is_train else args.batch_size
+        num_batches = samples_per_epoch // divisor
         loader = loader.with_epoch(num_batches)
         loader = loader.with_length(num_batches, silent=True)
 
@@ -380,6 +394,8 @@ def evaluate(
     eval_name: str,
 ):
     model.eval()
+    assert not args.get("distributed", False) or ut.is_main_process(), \
+        "eval must only run on master gpu in distributed mode"
 
     metric_logger = ut.MetricLogger(delimiter="  ")
     header = f"Eval ({eval_name}): [{epoch}]"
@@ -393,7 +409,7 @@ def evaluate(
 
     print_freq = args.get("print_freq", 100) if not args.debug else 1
     num_batches = epoch_num_batches if not args.debug else 10
-    example_step = random.randint(1, num_batches)
+    example_step = random.randint(1, num_batches) if num_batches > 0 else 1
 
     amp_dtype = getattr(torch, args.amp_dtype)
 
@@ -429,8 +445,9 @@ def evaluate(
         if use_cuda:
             torch.cuda.synchronize()
 
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
+    # skip sync when eval runs on master only (distributed mode)
+    if not args.get("distributed", False):
+        metric_logger.synchronize_between_processes()
     print(f"Averaged stats ({eval_name}):", metric_logger)
     stats = {f"eval/{eval_name}/{k}": meter.global_avg for k, meter in metric_logger.meters.items()}
 
