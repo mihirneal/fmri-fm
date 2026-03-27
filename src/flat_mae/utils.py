@@ -278,6 +278,7 @@ def init_distributed_mode(args):
         world_size=args.world_size,
         rank=args.rank,
         device_id=args.gpu,
+        timeout=datetime.timedelta(minutes=30),
     )
     torch.distributed.barrier()
 
