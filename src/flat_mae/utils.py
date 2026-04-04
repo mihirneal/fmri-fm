@@ -202,7 +202,7 @@ class MetricLogger:
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print(
             "{} Total time: {} ({:.4f} s / it)".format(
-                header, total_time_str, total_time / total_steps
+                header, total_time_str, total_time / max(total_steps, 1)
             )
         )
 
@@ -278,6 +278,7 @@ def init_distributed_mode(args):
         world_size=args.world_size,
         rank=args.rank,
         device_id=args.gpu,
+        timeout=datetime.timedelta(minutes=30),
     )
     torch.distributed.barrier()
 

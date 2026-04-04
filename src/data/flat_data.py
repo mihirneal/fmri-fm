@@ -25,12 +25,11 @@ import webdataset as wds
 from torch.utils.data import Dataset
 from cloudpathlib import CloudPath
 from huggingface_hub import snapshot_download
-from huggingface_hub.utils import disable_progress_bars
+from huggingface_hub.utils import disable_progress_bars, get_token
 
 DATA_CACHE_DIR = os.getenv("DATA_CACHE_DIR", "/tmp/datasets")
 
 disable_progress_bars()
-
 
 def make_flat_wds_dataset(
     url: str | list[str],
@@ -42,6 +41,7 @@ def make_flat_wds_dataset(
     select_files_pattern: str | None = None,
     shuffle: bool = True,
     buffer_size: int = 1000,
+    stream_hf: bool = False,
 ) -> wds.WebDataset:
     """Make fMRI flat map dataset."""
     if select_files_pattern:
@@ -52,8 +52,19 @@ def make_flat_wds_dataset(
     # resampling creates an infinite stream of shards sampled with replacement,
     # guaranteeing that no process runs out of data early in distributed training.
     # see webdataset FAQ: https://github.com/webdataset/webdataset/blob/main/FAQ.md
+    expanded_urls = expand_urls(url)
+    if stream_hf:
+        hf_token = get_token()
+        assert hf_token, "No HF token found; run hf auth login"
+        pipe_cmd = (
+            "pipe:curl -sS -L --fail -C - "
+            "--retry 20 --retry-delay 2 --retry-max-time 300 --retry-all-errors "
+            "--connect-timeout 10 "
+            f"-H 'Authorization: Bearer {hf_token}' "
+        )
+        expanded_urls = [f'{pipe_cmd}"{u}"' for u in expanded_urls]
     dataset = wds.WebDataset(
-        expand_urls(url),
+        expanded_urls,
         handler=warn_and_continue,
         resampled=shuffle,
         shardshuffle=False,
@@ -120,8 +131,9 @@ class FlatClipsDataset(Dataset):
         self,
         root: str | Path,
         transform: Callable[[dict[str, Any]], dict[str, Any]] = None,
+        aws_profile: str | None = None,
     ):
-        self.root = maybe_download(root)
+        self.root = maybe_download(root, aws_profile=aws_profile)
         self.files = sorted(p.name for p in self.root.glob("*.pt"))
         self.transform = transform
 
@@ -136,7 +148,7 @@ class FlatClipsDataset(Dataset):
         return len(self.files)
 
 
-def maybe_download(url: str, cache_dir: str | Path | None = None) -> Path:
+def maybe_download(url: str, cache_dir: str | Path | None = None, aws_profile: str | None = None) -> Path:
     cache_dir = Path(cache_dir or DATA_CACHE_DIR)
     cache_dir.mkdir(exist_ok=True)
 
@@ -156,10 +168,10 @@ def maybe_download(url: str, cache_dir: str | Path | None = None) -> Path:
     elif parsed.scheme == "s3":
         path = CloudPath(url)
         local_path = Path(cache_dir) / path.name
-        subprocess.run(
-            ["aws", "s3", "sync", "--quiet", str(path), str(local_path)],
-            check=True,
-        )
+        cmd = ["aws", "s3", "sync", "--quiet", str(path), str(local_path)]
+        if aws_profile:
+            cmd += ["--profile", aws_profile]
+        subprocess.run(cmd, check=True)
     else:
         assert not parsed.scheme, f"invalid url scheme {parsed.scheme}"
         local_path = Path(url)
